@@ -1,7 +1,7 @@
 AWSTemplateFormatVersion: 2010-09-09
-# This CloudFormation template deploys a basic VPC with 1 public and 4 privates subnets for Pure CBS deployment. 
+# This CloudFormation template deploys a basic VPC with 1 public and 4 privates subnets as well as S3 and DynamoDB VPC endpoints and public and private route table for Pure CBS deployment according to the requirements found in https://support.purestorage.com/FlashArray/PurityFA/Cloud_Block_Store/Cloud_Block_Store_Deployment_and_Configuration_Guide_for_AWS
+
 Resources:
-  # First, a VPC:
   VPC:
     Type: AWS::EC2::VPC
     Properties:
@@ -11,7 +11,7 @@ Resources:
       Tags:
       - Key: Name
         Value:  !Join ['', [!Ref "AWS::StackName", "-VPC" ]]
-  # Our VPC will need internet access:     
+        
   InternetGateway:
     Type: AWS::EC2::InternetGateway
     DependsOn: VPC
@@ -19,8 +19,9 @@ Resources:
     Type: AWS::EC2::VPCGatewayAttachment
     Properties:
       VpcId: !Ref VPC
-      InternetGatewayId: !Ref InternetGateway
-      
+      InternetGatewayId: !Ref InternetGateway     
+  
+  #CREATING 4 SUBNETS - 1 PUBLIC FOR INTERNET ACCESS AND 4 PRIVATE SUBNETS FOR CBS
   PublicSubnet:
     Type: AWS::EC2::Subnet
     Properties:
@@ -70,8 +71,8 @@ Resources:
       Tags:
       - Key: Name
         Value: !Sub ${AWS::StackName}-SystemSubnet
-
-  # Adding NAT Gateway
+        
+  #CREATING NAT GATEWAY
   NATGateway:
    Type: AWS::EC2::NatGateway
    Properties:
@@ -85,7 +86,7 @@ Resources:
    Properties:
      Domain: VPC       
        
-  # Adding route tables for our subnets:
+  #CREATING 2 ROUTE TABLES
   PublicRouteTable:
     Type: AWS::EC2::RouteTable
     Properties:
@@ -116,8 +117,7 @@ Resources:
       # Route traffic through the NAT Gateway:
       NatGatewayId: !Ref NATGateway
       
-# Attach the public subnets to public route tables,
-  # and attach the private subnets to private route tables:   
+  #ATTACHING 4 CBS PRIVATE SUBNETS TO PRIVATE ROUTE TABLE AND 1 PUBLIC SUBNET TO PUBLIC ROUTE TABLE 
   PublicSubnetRouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
@@ -144,7 +144,7 @@ Resources:
       SubnetId: !Ref SystemSubnet
       RouteTableId: !Ref PrivateRouteTable
       
-  # A security group for our NAT.  Ingress from the VPC IPs only.  Egress is TCP & UDP only:
+  #CREATING 4 SECURITY GROUPS - 1 FOR NAT AND 3 FOR CBS: ISCSI, REPLICATION AND MANAGEMENT. SYSTEM SECURITY GROUP FOR CBS IS BEING CREATED AUTOMATICALLY BY THE CBS CF TEMPLATE
   NATSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     DependsOn: AttachGateway
@@ -166,6 +166,9 @@ Resources:
         FromPort: 0
         ToPort: 65535
         CidrIp: 0.0.0.0/0
+      Tags:
+      - Key: Name
+        Value: !Sub ${AWS::StackName}-NATSecurityGroup         
         
   ReplicationSecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -184,6 +187,9 @@ Resources:
         FromPort: 8117
         ToPort: 8117
         CidrIp: 0.0.0.0/0
+      Tags:
+      - Key: Name
+        Value: !Sub ${AWS::StackName}-ReplicationSecurityGroup     
         
   iSCSISecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -195,7 +201,10 @@ Resources:
       - IpProtocol: tcp
         FromPort: 3260
         ToPort: 3260
-        CidrIp: !GetAtt VPC.CidrBlock        
+        CidrIp: !GetAtt VPC.CidrBlock
+      Tags:
+      - Key: Name
+        Value: !Sub ${AWS::StackName}-iSCSISecurityGroup         
         
   ManagementSecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -221,7 +230,46 @@ Resources:
         FromPort: 8084
         ToPort: 8084
         CidrIp: !GetAtt VPC.CidrBlock    
+      SecurityGroupEgress:
       - IpProtocol: tcp
         FromPort: 443
         ToPort: 443
         CidrIp: 0.0.0.0/0
+      Tags:
+      - Key: Name
+        Value: !Sub ${AWS::StackName}-ManagementSecurityGroup
+  
+  #CREATING S3 AND DYNAMODB ENDPOINTS AND ASSOCIATING WITH PRIVATE ROUTE TABLE
+  S3Endpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      PolicyDocument: 
+        Version: 2012-10-17
+        Statement:
+        - Effect: Allow
+          Principal: "*"
+          Action:
+            - "*"
+          Resource:
+            - "*"
+      RouteTableIds:
+        - !Ref PrivateRouteTable
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.s3
+      VpcId: !Ref VPC
+      
+  DynamoDBendpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      PolicyDocument: 
+        Version: 2012-10-17
+        Statement:
+        - Effect: Allow
+          Principal: "*"
+          Action:
+            - "*"
+          Resource:
+            - "*"    
+      RouteTableIds:
+        - !Ref PrivateRouteTable        
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.dynamodb
+      VpcId: !Ref VPC 
