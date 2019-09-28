@@ -144,31 +144,7 @@ Resources:
       SubnetId: !Ref SystemSubnet
       RouteTableId: !Ref PrivateRouteTable
       
-  #CREATING 4 SECURITY GROUPS - 1 FOR NAT AND 3 FOR CBS: ISCSI, REPLICATION AND MANAGEMENT. SYSTEM SECURITY GROUP FOR CBS IS BEING CREATED AUTOMATICALLY BY THE CBS CF TEMPLATE
-  NATSecurityGroup:
-    Type: AWS::EC2::SecurityGroup
-    DependsOn: AttachGateway
-    Properties:
-      GroupName: !Sub NATSecurityGroup-${AWS::StackName}
-      GroupDescription: Enable internal access to the NAT gateway
-      VpcId: !Ref VPC
-      SecurityGroupIngress:
-      - IpProtocol: tcp
-        FromPort: 0
-        ToPort: 1024
-        CidrIp: !GetAtt VPC.CidrBlock
-      SecurityGroupEgress:
-      - IpProtocol: tcp
-        FromPort: 0
-        ToPort: 65535
-        CidrIp: 0.0.0.0/0
-      - IpProtocol: udp
-        FromPort: 0
-        ToPort: 65535
-        CidrIp: 0.0.0.0/0
-      Tags:
-      - Key: Name
-        Value: !Sub ${AWS::StackName}-NATSecurityGroup         
+  #CREATING 3 SECURITY GROUPS FOR CBS: ISCSI, REPLICATION AND MANAGEMENT. SYSTEM SECURITY GROUP FOR CBS IS BEING CREATED AUTOMATICALLY BY THE CBS CF TEMPLATE         
         
   ReplicationSecurityGroup:
     Type: AWS::EC2::SecurityGroup
