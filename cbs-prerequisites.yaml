@@ -1,0 +1,227 @@
+AWSTemplateFormatVersion: 2010-09-09
+# This CloudFormation template deploys a basic VPC with 1 public and 4 privates subnets for Pure CBS deployment. 
+Resources:
+  # First, a VPC:
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+      - Key: Name
+        Value:  !Join ['', [!Ref "AWS::StackName", "-VPC" ]]
+  # Our VPC will need internet access:     
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    DependsOn: VPC
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+      
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.0.48/28
+      AvailabilityZone: !Select [ 0, !GetAZs ]    # Get the first AZ in the list       
+      Tags:
+      - Key: Name
+        Value: !Sub ${AWS::StackName}-PublicSubnet
+        
+  iSCSISubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.0.0/28
+      AvailabilityZone: !Select [ 0, !GetAZs ]    # Get the first AZ in the list       
+      Tags:
+      - Key: Name
+        Value: !Sub ${AWS::StackName}-iSCSISubnet  
+        
+  ManagementSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.0.16/28
+      AvailabilityZone: !Select [ 0, !GetAZs ]    # Get the first AZ in the list       
+      Tags:
+      - Key: Name
+        Value: !Sub ${AWS::StackName}-ManagementSubnet
+        
+  ReplicationSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.0.32/28
+      AvailabilityZone: !Select [ 0, !GetAZs ]    # Get the first AZ in the list       
+      Tags:
+      - Key: Name
+        Value: !Sub ${AWS::StackName}-ReplicationSubnet
+        
+  SystemSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.0.128/25
+      AvailabilityZone: !Select [ 0, !GetAZs ]    # Get the first AZ in the list       
+      Tags:
+      - Key: Name
+        Value: !Sub ${AWS::StackName}-SystemSubnet
+
+  # Adding NAT Gateway
+  NATGateway:
+   Type: AWS::EC2::NatGateway
+   Properties:
+     AllocationId: !GetAtt ElasticIPAddress.AllocationId
+     SubnetId: !Ref PublicSubnet
+     Tags:
+     - Key: Name
+       Value: !Sub NAT-${AWS::StackName}
+  ElasticIPAddress:
+   Type: AWS::EC2::EIP
+   Properties:
+     Domain: VPC       
+       
+  # Adding route tables for our subnets:
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+      - Key: Name
+        Value: Public
+  PublicRoute1:   # Public route table has direct routing to IGW:
+    Type: AWS::EC2::Route
+    DependsOn: AttachGateway
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+      
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+      - Key: Name
+        Value: Private        
+  PrivateRoute1:  # Private route table can access web via NAT gateway
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      # Route traffic through the NAT Gateway:
+      NatGatewayId: !Ref NATGateway
+      
+# Attach the public subnets to public route tables,
+  # and attach the private subnets to private route tables:   
+  PublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref PublicRouteTable
+  iSCSISubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref iSCSISubnet
+      RouteTableId: !Ref PrivateRouteTable
+  ManagementSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref ManagementSubnet
+      RouteTableId: !Ref PrivateRouteTable
+  ReplicationSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref ReplicationSubnet
+      RouteTableId: !Ref PrivateRouteTable
+  SystemSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref SystemSubnet
+      RouteTableId: !Ref PrivateRouteTable
+      
+  # A security group for our NAT.  Ingress from the VPC IPs only.  Egress is TCP & UDP only:
+  NATSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    DependsOn: AttachGateway
+    Properties:
+      GroupName: !Sub NATSecurityGroup-${AWS::StackName}
+      GroupDescription: Enable internal access to the NAT gateway
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 0
+        ToPort: 1024
+        CidrIp: !GetAtt VPC.CidrBlock
+      SecurityGroupEgress:
+      - IpProtocol: tcp
+        FromPort: 0
+        ToPort: 65535
+        CidrIp: 0.0.0.0/0
+      - IpProtocol: udp
+        FromPort: 0
+        ToPort: 65535
+        CidrIp: 0.0.0.0/0
+        
+  ReplicationSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    DependsOn: AttachGateway
+    Properties:
+      GroupName: !Sub ReplicationSecurityGroup-${AWS::StackName}
+      GroupDescription: Enable replication traffic for CBS
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 8117
+        ToPort: 8117
+        CidrIp: !GetAtt VPC.CidrBlock        
+      SecurityGroupEgress:
+      - IpProtocol: tcp
+        FromPort: 8117
+        ToPort: 8117
+        CidrIp: 0.0.0.0/0
+        
+  iSCSISecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub iSCSISecurityGroup-${AWS::StackName}
+      GroupDescription: Enable iSCSI traffic for CBS
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 3260
+        ToPort: 3260
+        CidrIp: !GetAtt VPC.CidrBlock        
+        
+  ManagementSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    DependsOn: AttachGateway    
+    Properties:
+      GroupName: !Sub ManagementSecurityGroup-${AWS::StackName}
+      GroupDescription: Enable management traffic for CBS
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 22
+        ToPort: 22
+        CidrIp: !GetAtt VPC.CidrBlock         
+      - IpProtocol: tcp
+        FromPort: 80
+        ToPort: 80
+        CidrIp: !GetAtt VPC.CidrBlock       
+      - IpProtocol: tcp
+        FromPort: 443
+        ToPort: 443
+        CidrIp: !GetAtt VPC.CidrBlock       
+      - IpProtocol: tcp
+        FromPort: 8084
+        ToPort: 8084
+        CidrIp: !GetAtt VPC.CidrBlock    
+      - IpProtocol: tcp
+        FromPort: 443
+        ToPort: 443
+        CidrIp: 0.0.0.0/0
